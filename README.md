@@ -211,6 +211,7 @@ $ids = $queue->getIdsByState(Caster::STATE_FAILED, 'mytube');
 foreach ($ids as $id) {
     $job = Caster::reload($id);
     $job->kick();
+}
 ```
 
 
