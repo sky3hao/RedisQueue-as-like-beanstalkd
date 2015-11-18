@@ -1,3 +1,257 @@
+> English instructions
+
+# Intro
+
+The goal is: beanstalkd is a very good message queuing system, but still need additional operation and maintenance, where imitation beanstalkd, using PHP and Redis provides simple but powerful message queuing system.
+
+# Install
+
+Currently built into the frame, also can be used independently, through simple modifications can be completely decoupled with other core modules.
+
+# Overview
+
+- [Create Queue](#Create Queue)
+  - [Create with config](#Create with config)
+- [Create job](#Create job)
+  - [Create delayed job](#Create delayed job)
+  - [Create timing job](#Create timing job)
+  - [Create periodic job](#Create periodic job)
+  - [Create attempts job](#Create attempts job)
+- [Process job](#Process job)
+  - [Job status scheduling control](#Job status scheduling control)
+  - [Concurrent pattern](#Concurrent pattern)
+
+# Usage
+
+## Configuration
+
+Create queue.ini at Yaf-framework in the conf directory, according to their own machine, add the following configuration items:
+
+```php
+[product]
+[dev : product]
+queue.redis.0.host = 127.0.0.1      
+queue.redis.0.port = 6379           
+queue.redis.0.db = 0            
+queue.redis.0.name = queue      
+queue.redis.0.distributed = 0   
+queue.redis.1.host = 127.0.0.1
+queue.redis.1.port = 6379
+queue.redis.1.db = 0
+queue.redis.1.name = queue
+queue.redis.1.distributed = 0
+[test : dev]
+```
+
+## Create Queue
+
+```php
+$queue = \Queue::getInstance();
+```
+
+## Create with config
+
+If you do not want to use the default configuration file configuration, you can customize the configuration files and configuration index
+
+```php
+$queue = \Queue::getInstance('myself.ini', 'mytest');
+```
+
+## Create job
+
+Create a job is to write messages to a named TUBE, the following tube called "mytube"
+
+```php
+$data = array(
+    'name' => 'kevin',
+    'content' => array(
+        'test'  => 'some string',
+        'num' => null,
+    ),
+);
+$queue = Queue::getInstance();
+$queue->putInTube('mytube', $data);
+```
+
+###　Create delayed job
+
+Delay job is in the queue after, the process will not be processed immediately acquire, it will be processed after a delay specified time.
+
+```php
+// 3600 seconds after will be processed
+$option = array(
+    'delay' => 3600, 
+);
+$queue->putInTube('mytube', $data, $option);
+```
+
+### Create timing job
+
+After the timer job queue, at a particular point in time it will be processed the process of acquiring and processing.
+
+```php
+// Job will be processed at 2015-10-29 23:34
+$option = array(
+    'timing' => '2015-10-29 23:34',
+);
+$queue->putInTube('mytube', $data, $option);
+```
+
+Timing format is process as [PHP date and time formats](http://php.net/manual/en/datetime.formats.php), You can use:
+
+- `Next Monday`
+- `+1 days`
+- `last day of next month`
+- `2013-09-13 00:00:00`
+- and so on..
+
+> Note that, if you create a scheduled job a past time, the job will not be discarded, but will immediately be triggered.
+
+
+###　Create periodic job
+
+Periodic job can replace a non-specific time the cyclical crontab.
+
+```php
+// Is triggered once every 3600 seconds, not destroy.
+$option = array(
+    'periodic' => 3600,
+);
+$queue->putInTube('mytube', $data, $option);
+```
+
+###　Create attempts job
+
+When treated if treatment fails, you can set a number of retries to repeated attempts to deal with this job:
+This parameter can be used with the above parameter time control.
+
+```php
+$option = array(
+    'attempts' => 5,
+);
+$queue->putInTube('mytube', $data, $option);
+```
+
+
+## Process job
+
+Processing message job you need to create a daemon script must be executed in the CLI mode, where you can use the framework of [CLI-TASK](https://github.com/sky3hao/Cli-Control):
+
+```php
+class DaemonTask extends TaskBase
+{
+    /**
+     * Create a daemon, you need to perform in CLI mode
+     */
+    public function indexAction()
+    {
+        $queue = Queue::getInstance();
+        // Create process listener 'mytube' this tube, processing queue job
+        $queue->doWork('mytube', function(Caster $job) {
+            $data = $job->getBody();
+
+            // process
+
+            // Of particular note that anonymous function in the program is in the form of child processes
+            // If properly processed a JOB, need to send end signal: exit(0)
+            exit(0);
+        });
+
+    }
+}
+```
+
+### Job status scheduling control
+
+There are four status messages: Ready, Reserved, Delayed, Failed, the life cycle of these states as follows:
+
+```php
+put with delay               release with delay
+  ----------------> [DELAYED] <------------.
+                        |                   |
+                        | (time passes)     |
+                        |                   |
+   put                  v     reserve       |       delete
+  -----------------> [READY] ---------> [RESERVED] --------> *poof*
+                       ^  ^                |  |
+                       |   \  release      |  |
+                       |    `-------------'   |
+                       |                      |
+                       | kick                 |
+                       |                      |
+                       |       bury           |
+                    [FAILED] <---------------'
+                       |
+                       |  delete
+                        `--------> *poof*
+```
+
+Treatment process of the characters in the subscription status (RESERVED), generally after processing will automatically delete, there is an exception if the failure will bury queue.
+Developers can also take the initiative to delete, release, or bury this job:
+
+```php
+$queue->doWork('mytube', function(Caster $job) {
+    $data = $job->getBody();
+
+    if ($data['name'] != 'kevin') {
+        $job->bury();
+    } else {
+        $job->release(120); // The mission is set to delay the job back
+    }
+
+    exit(0);
+});
+```
+
+Processing failed job:
+
+```php
+$queue = Queue::getInstance();
+$ids = $queue->getIdsByState(Caster::STATE_FAILED, 'mytube');
+foreach ($ids as $id) {
+    $job = Caster::reload($id);
+    $job->kick();
+```
+
+
+### Concurrent pattern
+
+In most cases, the message queue holding "FIFO" (first in first out) principle, but also business will use distributed scenes.
+Distributed processing messages to improve the processing efficiency, in order to avoid concurrent reads and emerging issues, needs to be distributed configuration file is set to 1
+
+```php
+...
+queue.redis.1.distributed = 1
+```
+
+# License
+
+(The MIT License)
+
+Copyright (c) 2015 Kevin Liu &lt;sky3hao@qq.com&gt;
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+'Software'), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+
+> 中文说明
+
 # 简介
 
 目标: beanstalkd是一款很优秀的消息队列系统, 但是还是需要额外的运维, 这里模仿beanstalkd,使用PHP和Redis提供使用简单而功能强大的消息队列系统.
@@ -23,7 +277,7 @@
 
 ## 配置文件
 
-在Chip里的conf目录下创建queue.ini, 根据自己的机器增加以下配置项:
+在Yaf里的conf目录下创建queue.ini, 根据自己的机器增加以下配置项:
 
 ```php
 [product]
